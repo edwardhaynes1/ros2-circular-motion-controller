@@ -866,3 +866,216 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - Based on ROBOTIS TurtleBot3 packages
 - Uses osrf/ros Docker images
 - Built for DevOps for Cyber-Physical Systems course at University of Bern
+
+
+# Übungsblatt 06: ROS 2 Fundamentals: Topics, Nodes & Communication
+
+**Name:** Edward Haynes  
+**Student ID:** eh25l768  
+**ROS2 Version:** Humble  
+**Repository:** https://github.com/edwardhaynes1/ros2-circular-motion-controller
+
+
+---
+
+## Aufgabe 1: Create ROS2 Package & Publisher-Subscriber Nodes
+
+### (a) Package Creation & Circle Motion Publisher
+
+Package created using:
+```bash
+cd /workspace/turtlebot3_ws/src
+ros2 pkg create --build-type ament_python student_robotics
+```
+
+**Package structure:**
+
+![Package Structure](package_structure.png)
+
+**Code: `circle_motion.py`**
+
+```python
+#!/usr/bin/env python3
+import rclpy
+from rclpy.node import Node
+from geometry_msgs.msg import Twist
+
+class CircleMotion(Node):
+    def __init__(self):
+        super().__init__('circle_motion')
+        self.publisher = self.create_publisher(Twist, '/cmd_vel', 10)
+        self.timer = self.create_timer(0.1, self.publish_velocity)
+        self.get_logger().info('Circle Motion node started')
+
+    def publish_velocity(self):
+        msg = Twist()
+        msg.linear.x = 0.3
+        msg.angular.z = 0.5
+        self.publisher.publish(msg)
+
+def main(args=None):
+    rclpy.init(args=args)
+    node = CircleMotion()
+    rclpy.spin(node)
+    rclpy.shutdown()
+
+if __name__ == '__main__':
+    main()
+```
+
+**Robot moving in circles in Gazebo:**
+
+![Circle Motion Gazebo](circle_motion_gazebo.png)
+
+**Why use `create_timer()`?**
+
+`create_timer()` allows the node to publish velocity commands at a fixed, predictable frequency (10 Hz) without blocking the rest of the program. This is preferable to a manual loop because ROS2 can manage the timing internally, ensuring consistent message rates even under varying system load.
+
+---
+
+### (b) Odometry Subscriber
+
+**Code: `odom_monitor.py`**
+
+```python
+#!/usr/bin/env python3
+import rclpy
+from rclpy.node import Node
+from nav_msgs.msg import Odometry
+
+class OdomMonitor(Node):
+    def __init__(self):
+        super().__init__('odom_monitor')
+        self.subscription = self.create_subscription(
+            Odometry, '/odom', self.odom_callback, 10)
+        self.get_logger().info('Odom Monitor node started')
+
+    def odom_callback(self, msg):
+        x = msg.pose.pose.position.x
+        y = msg.pose.pose.position.y
+        vx = msg.twist.twist.linear.x
+        vz = msg.twist.twist.angular.z
+        self.get_logger().info(
+            f'Position: x={x:.2f}, y={y:.2f} | Velocity: linear.x={vx:.2f}, angular.z={vz:.2f}'
+        )
+
+def main(args=None):
+    rclpy.init(args=args)
+    node = OdomMonitor()
+    rclpy.spin(node)
+    rclpy.shutdown()
+
+if __name__ == '__main__':
+    main()
+```
+
+**Both nodes running simultaneously:**
+
+![Odom Monitor Output](odom_monitor_output.png)
+
+**`ros2 node list` showing both nodes:**
+
+![Node List](node_list.png)
+
+**How does pub-sub decoupling work?**
+
+In the pub-sub pattern, nodes communicate exclusively through named topics rather than directly with each other, meaning a publisher has no knowledge of who is subscribing and vice versa. This decoupling means nodes are independently deployable — you can start, stop, or replace one node without affecting others. In this exercise, `circle_motion` publishes to `/cmd_vel` without knowing that `turtlebot3_diff_drive` is listening, and `odom_monitor` subscribes to `/odom` without knowing anything about how that data is generated.
+
+---
+
+## Aufgabe 2: ROS2 Topic Inspection & Message Frequency Analysis
+
+### (a) ROS2 CLI Topic Commands
+
+**`ros2 topic list`:**
+
+![Topic List](topic_list.png)
+
+**`ros2 topic info /cmd_vel`:**
+
+![Topic Info cmd_vel](topic_info_cmdvel.png)
+
+**`ros2 topic info /odom`:**
+
+![Topic Info odom](topic_info_odom.png)
+
+**`ros2 topic hz /odom`:**
+
+![Topic Hz odom](topic_hz_odom.png)
+
+**`ros2 topic bw /odom`:**
+
+![Topic BW odom](topic_bw_odom.png)
+
+**`ros2 node list`:**
+
+![Node List](node_list.png)
+
+**`ros2 node info /circle_motion`:**
+
+![Node Info circle_motion](node_info_circle_motion.png)
+
+**What is the /odom frequency and why does it matter?**
+
+The `/odom` topic publishes at approximately 30 Hz. Frequency matters for robot control because a low update rate means the controller receives stale position data, leading to delayed responses and unstable or jerky motion — especially critical in closed-loop control systems where the robot must react to its environment in real time.
+
+**How many publishers and subscribers does /cmd_vel have?**
+
+One publisher: `/circle_motion`. One subscriber: `/turtlebot3_diff_drive`.
+
+**What is the difference between `ros2 topic hz` and `ros2 topic bw`?**
+
+`ros2 topic hz` measures how frequently messages are published on a topic in Hz, indicating the update rate of the data. `ros2 topic bw` measures the bandwidth consumed by the topic in bytes per second, which is useful for identifying whether high-frequency or large messages are creating network or memory bottlenecks.
+
+---
+
+### (b) Visualize Communication Graph
+
+**`rqt_graph`:**
+
+![rqt_graph](rqt_graph.png)
+
+**What does the graph show?**
+
+The graph shows the complete communication architecture of the running ROS2 system, with nodes represented as ellipses and topics as labelled arrows between them. It clearly shows that `/circle_motion` publishes to `/cmd_vel`, which is consumed by `/turtlebot3_diff_drive`, which in turn publishes odometry data to `/odom`, which is consumed by `/odom_monitor`. This visualises the pub-sub decoupling — nodes are only connected through topics, not directly to each other.
+
+**What happens if you stop circle_motion? Does odom_monitor still work?**
+
+Yes, `odom_monitor` continues running because it subscribes to `/odom`, which is published by `turtlebot3_diff_drive` independently of `circle_motion`. Since nodes are decoupled through topics, stopping one publisher does not affect unrelated subscribers — though the robot will stop moving and odometry values will flatline at zero velocity.
+
+---
+
+## Commands Used
+
+```bash
+# Create package
+cd /workspace/turtlebot3_ws/src
+ros2 pkg create --build-type ament_python student_robotics
+
+# Build
+cd /workspace/turtlebot3_ws
+colcon build --packages-select student_robotics
+source install/setup.bash
+
+# Launch simulation
+tb3_empty
+
+# Run nodes
+ros2 run student_robotics circle_motion
+ros2 run student_robotics odom_monitor
+
+# Inspection commands
+ros2 topic list
+ros2 topic info /cmd_vel
+ros2 topic info /odom
+ros2 topic hz /odom
+ros2 topic bw /odom
+ros2 node list
+ros2 node info /circle_motion
+rqt_graph
+```
+
+## Issues Encountered
+
+- `tree` command not installed in container — used `find student_robotics` instead.
+- VNC terminal uses `dash` by default — needed to run `bash` first before sourcing the workspace.
